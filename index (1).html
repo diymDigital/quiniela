@@ -1,0 +1,778 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="theme-color" content="#070e1f"/>
+  <title>Quiniela</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Bebas+Neue&family=Space+Mono:wght@700&display=swap" rel="stylesheet"/>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Supabase JS -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    body{background:#070e1f;color:#e8f0ff;font-family:'DM Sans',sans-serif}
+    input,button{font-family:inherit}
+    input::placeholder{color:rgba(255,255,255,.22)}
+    button:active{transform:scale(.97)}
+    ::-webkit-scrollbar{width:5px}
+    ::-webkit-scrollbar-thumb{background:rgba(255,255,255,.08);border-radius:3px}
+    @keyframes sd{from{opacity:0;transform:translateX(-50%) translateY(-8px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+    @keyframes fu{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:translateY(0)}}
+    @keyframes spin{to{transform:rotate(360deg)}}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback } = React;
+
+// ── CONFIGURACIÓN SUPABASE ────────────────────────────────────────────────────
+// INSTRUCCIONES: Reemplaza estos dos valores con los de tu proyecto Supabase
+const SUPABASE_URL = "https://zenfwmrradbvlphpseqs.supabase.co";
+const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InplbmZ3bXJyYWRidmxwaHBzZXFzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA3MTQ4MjcsImV4cCI6MjA5NjI5MDgyN30.CNVFfTVAKl39TlTUC3eje32JCpv5CdlllcSW3D3janU";
+const sb = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// ── CONSTANTES ────────────────────────────────────────────────────────────────
+const PRIZES = [
+  { id:"tool",    label:"Herramienta",      emoji:"🔧", desc:"Hasta $500" },
+  { id:"cinema",  label:"Entradas de cine",  emoji:"🎬", desc:"Para 2 personas" },
+  { id:"perfume", label:"Perfume",            emoji:"💐", desc:"Hasta $500" },
+  { id:"clothes", label:"Ropa",               emoji:"👕", desc:"Hasta $500" },
+];
+const DEFAULT_CFG = {
+  name:"Quiniela Jornada 2026",
+  matches:[
+    {id:1,home:"Real Madrid",    away:"Barcelona",      date:"Sáb 7 Jun"},
+    {id:2,home:"Atlético Madrid",away:"Sevilla",        date:"Sáb 7 Jun"},
+    {id:3,home:"Valencia",       away:"Villarreal",     date:"Sáb 7 Jun"},
+    {id:4,home:"Betis",          away:"Osasuna",        date:"Dom 8 Jun"},
+    {id:5,home:"Girona",         away:"Athletic Club",  date:"Dom 8 Jun"},
+    {id:6,home:"Celta Vigo",     away:"Rayo Vallecano", date:"Dom 8 Jun"},
+    {id:7,home:"Getafe",         away:"Las Palmas",     date:"Lun 9 Jun"},
+    {id:8,home:"Mallorca",       away:"Alavés",         date:"Lun 9 Jun"},
+  ],
+  results:{},
+  closed:false,
+  accessCodes:[],
+  adminPin:"1234",
+};
+const RC = {
+  "G1":{ bg:"#22d3a5", text:"#070e1f" },
+  "E" :{ bg:"#f59e0b", text:"#070e1f" },
+  "G2":{ bg:"#f43f8a", text:"#fff"    },
+};
+const uid   = ()=> Math.random().toString(36).slice(2,9);
+const rand4 = ()=> String(Math.floor(1000+Math.random()*9000));
+
+// ── APP ───────────────────────────────────────────────────────────────────────
+function App() {
+  const [cfg,    setCfgRaw] = useState(null);
+  const [parts,  setParts]  = useState([]);
+  const [codes,  setCodes]  = useState([]);
+  const [view,   setView]   = useState("home");
+  const [adminOk,setAdminOk]= useState(false);
+  const [toast,  setToast]  = useState(null);
+  const [loading,setLoading]= useState(true);
+
+  // ── Supabase helpers ──
+  async function fetchAll() {
+    const [cfgRes, partsRes, codesRes] = await Promise.all([
+      sb.from("config").select("*").eq("id",1).single(),
+      sb.from("participants").select("*").order("created_at"),
+      sb.from("access_codes").select("*").order("created_at"),
+    ]);
+    if (cfgRes.data)   setCfgRaw(cfgRes.data.data);
+    else               setCfgRaw(DEFAULT_CFG);
+    if (partsRes.data) setParts(partsRes.data);
+    if (codesRes.data) setCodes(codesRes.data);
+    setLoading(false);
+  }
+
+  async function saveCfg(newCfg) {
+    setCfgRaw(newCfg);
+    await sb.from("config").upsert({id:1, data:newCfg});
+  }
+
+  async function addParticipant(p) {
+    const row = {id:uid(), real_name:p.realName, alias:p.alias, prize_id:p.prizeId, picks:p.picks, code:p.code};
+    const {data} = await sb.from("participants").insert(row).select().single();
+    if (data) setParts(prev=>[...prev, data]);
+    return !!data;
+  }
+
+  async function removeParticipant(id) {
+    await sb.from("participants").delete().eq("id",id);
+    setParts(prev=>prev.filter(p=>p.id!==id));
+  }
+
+  async function addCode(code) {
+    const row = {code, used:false};
+    const {data} = await sb.from("access_codes").insert(row).select().single();
+    if (data) setCodes(prev=>[...prev,data]);
+  }
+
+  async function markCodeUsed(code) {
+    await sb.from("access_codes").update({used:true}).eq("code",code);
+    setCodes(prev=>prev.map(c=>c.code===code?{...c,used:true}:c));
+  }
+
+  async function removeCode(code) {
+    await sb.from("access_codes").delete().eq("code",code);
+    setCodes(prev=>prev.filter(c=>c.code!==code));
+  }
+
+  async function resetAll() {
+    await Promise.all([
+      sb.from("participants").delete().neq("id","__none__"),
+      sb.from("access_codes").delete().neq("code","__none__"),
+    ]);
+    const fresh = {...DEFAULT_CFG, adminPin: cfg.adminPin};
+    await saveCfg(fresh);
+    setParts([]); setCodes([]);
+  }
+
+  useEffect(()=>{ fetchAll(); },[]);
+
+  // Refresco en tiempo real cada 15s
+  useEffect(()=>{
+    const t = setInterval(fetchAll, 15000);
+    return ()=>clearInterval(t);
+  },[]);
+
+  function toast_(msg, col="#22d3a5") {
+    setToast({msg,col});
+    setTimeout(()=>setToast(null),2800);
+  }
+
+  const matches = cfg?.matches||[];
+  const results = cfg?.results||{};
+  const hasRes  = Object.keys(results).length>0;
+
+  const scored = parts.map(p=>{
+    let pts=0;
+    matches.forEach(m=>{ if(results[m.id]&&p.picks[m.id]===results[m.id]) pts+=3; });
+    return {...p,pts};
+  }).sort((a,b)=>b.pts-a.pts);
+
+  if (loading) return <Splash/>;
+
+  return (
+    <div style={shell}>
+      {toast&&(
+        <div style={{position:"fixed",top:18,left:"50%",transform:"translateX(-50%)",background:toast.col,color:"#070e1f",padding:"10px 22px",borderRadius:50,fontWeight:700,fontSize:13,zIndex:9999,boxShadow:`0 4px 20px ${toast.col}88`,whiteSpace:"nowrap",animation:"sd .25s ease"}}>
+          {toast.msg}
+        </div>
+      )}
+
+      <header style={hdr}>
+        <div onClick={()=>setView("home")} style={{cursor:"pointer",display:"flex",alignItems:"center",gap:8}}>
+          <span style={logoSt}>⚽ QUINIELA</span>
+          <span style={subSt}>{cfg?.name}</span>
+        </div>
+        <nav style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {[["join","🙋 Participar"],["board","🏆 Tabla"]].map(([v,l])=>(
+            <button key={v} onClick={()=>setView(v)} style={nb(view===v)}>{l}</button>
+          ))}
+          <button onClick={()=>adminOk?setView("admin"):setView("adminLogin")} style={nb(view==="admin"||view==="adminLogin")}>⚙️</button>
+        </nav>
+      </header>
+
+      <main style={{maxWidth:720,margin:"0 auto",padding:"28px 16px 90px"}}>
+        {view==="home"       && <Home cfg={cfg} parts={parts} matches={matches} results={results} scored={scored} hasRes={hasRes} setView={setView}/>}
+        {view==="join"       && <Join cfg={cfg} matches={matches} parts={parts} codes={codes} addParticipant={addParticipant} markCodeUsed={markCodeUsed} toast_={toast_} setView={setView}/>}
+        {view==="board"      && <Board scored={scored} matches={matches} results={results} hasRes={hasRes} parts={parts}/>}
+        {view==="adminLogin" && <AdminLogin cfg={cfg} setAdminOk={setAdminOk} setView={setView}/>}
+        {view==="admin"&&adminOk&&(
+          <Admin cfg={cfg} saveCfg={saveCfg} parts={parts} codes={codes}
+            removeParticipant={removeParticipant} addCode={addCode}
+            removeCode={removeCode} resetAll={resetAll} toast_={toast_} fetchAll={fetchAll}/>
+        )}
+      </main>
+    </div>
+  );
+}
+
+// ── HOME ──────────────────────────────────────────────────────────────────────
+function Home({cfg,parts,matches,results,scored,hasRes,setView}){
+  return(
+    <div style={anim}>
+      <div style={{textAlign:"center",padding:"32px 0 24px"}}>
+        <div style={{fontFamily:"'Bebas Neue'",fontSize:"clamp(32px,7vw,52px)",letterSpacing:4,lineHeight:1,color:"#fff",marginBottom:8}}>{cfg?.name}</div>
+        <div style={{color:"rgba(255,255,255,.4)",fontSize:14,marginBottom:24}}>
+          Pronostica cada partido · {matches.length} partidos · Elige tu premio
+        </div>
+        <div style={{display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap",marginBottom:24}}>
+          {PRIZES.map(p=>(
+            <div key={p.id} style={{background:"rgba(255,255,255,.05)",border:"1px solid rgba(255,255,255,.1)",borderRadius:12,padding:"10px 14px",display:"flex",alignItems:"center",gap:7}}>
+              <span style={{fontSize:20}}>{p.emoji}</span>
+              <div><div style={{fontSize:12,fontWeight:600}}>{p.label}</div><div style={{fontSize:10,color:"rgba(255,255,255,.35)"}}>{p.desc}</div></div>
+            </div>
+          ))}
+        </div>
+        <div style={{display:"flex",gap:10,justifyContent:"center",flexWrap:"wrap"}}>
+          <button onClick={()=>setView("join")} style={btnP}>🙋 Participar</button>
+          <button onClick={()=>setView("board")} style={btnS}>🏆 Ver tabla</button>
+        </div>
+      </div>
+
+      <SLabel>PARTIDOS DE LA JORNADA</SLabel>
+      {matches.map((m,i)=>(
+        <div key={m.id} style={{...rowSt,animation:`fu .3s ease ${i*30}ms both`}}>
+          <div style={{fontWeight:600,fontSize:14}}>{m.home} <span style={vsSt}>vs</span> {m.away}</div>
+          <div style={{display:"flex",gap:8,alignItems:"center"}}>
+            {results[m.id]&&<RChip v={results[m.id]} match={m}/>}
+            <span style={{fontSize:11,color:"rgba(255,255,255,.3)",fontFamily:"monospace"}}>{m.date}</span>
+          </div>
+        </div>
+      ))}
+
+      {hasRes&&scored.length>0&&(
+        <>
+          <SLabel style={{marginTop:24}}>LÍDERES</SLabel>
+          {scored.slice(0,3).map((p,i)=>(
+            <div key={p.id} style={{...rowSt}}>
+              <span style={{fontSize:20}}>{["🥇","🥈","🥉"][i]}</span>
+              <span style={{flex:1,fontWeight:600}}>{p.alias}</span>
+              {PRIZES.find(x=>x.id===p.prize_id)&&<span>{PRIZES.find(x=>x.id===p.prize_id).emoji}</span>}
+              <span style={{fontFamily:"monospace",fontSize:18,color:"#22d3a5"}}>{p.pts} pts</span>
+            </div>
+          ))}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── JOIN ──────────────────────────────────────────────────────────────────────
+function Join({cfg,matches,parts,codes,addParticipant,markCodeUsed,toast_,setView}){
+  const [step,     setStep]    = useState("code");
+  const [code,     setCode]    = useState("");
+  const [codeErr,  setCodeErr] = useState("");
+  const [realName, setRealName]= useState("");
+  const [alias,    setAlias]   = useState("");
+  const [prizeId,  setPrizeId] = useState("");
+  const [picks,    setPicks]   = useState({});
+  const [err,      setErr]     = useState("");
+  const [saving,   setSaving]  = useState(false);
+
+  const pickCount = Object.keys(picks).length;
+  const allPicked = matches.every(m=>picks[m.id]);
+
+  function checkCode(){
+    const found = codes.find(c=>c.code===code.trim()&&!c.used);
+    if(!found){setCodeErr("Clave inválida o ya utilizada. Pídele una nueva al organizador.");return;}
+    setCodeErr(""); setStep("form");
+  }
+
+  async function submit(){
+    if(!realName.trim()){setErr("Escribe tu nombre completo");return;}
+    if(!alias.trim()){setErr("Escribe un apodo para la tabla");return;}
+    if(!prizeId){setErr("Elige tu premio preferido");return;}
+    if(parts.find(p=>p.alias.toLowerCase()===alias.trim().toLowerCase())){setErr("Ese apodo ya está en uso, elige otro");return;}
+    const miss=matches.find(m=>!picks[m.id]);
+    if(miss){setErr(`Falta tu pronóstico: ${miss.home} vs ${miss.away}`);return;}
+    setSaving(true);
+    const ok = await addParticipant({realName:realName.trim(),alias:alias.trim(),prizeId,picks,code:code.trim()});
+    if(ok){
+      await markCodeUsed(code.trim());
+      setStep("done");
+      toast_(`¡${alias.trim()} registrado! 🎉`);
+    } else {
+      setErr("Error al guardar. Intenta de nuevo.");
+    }
+    setSaving(false);
+  }
+
+  if(cfg?.closed) return(
+    <div style={{...anim,textAlign:"center",padding:"80px 0"}}>
+      <div style={{fontSize:56}}>🔒</div>
+      <div style={{fontFamily:"'Bebas Neue'",fontSize:36,letterSpacing:3,marginTop:16,color:"#f43f8a"}}>QUINIELA CERRADA</div>
+      <div style={{color:"rgba(255,255,255,.4)",marginTop:8}}>El organizador cerró el registro</div>
+    </div>
+  );
+
+  if(step==="done") return(
+    <div style={{...anim,textAlign:"center",padding:"60px 0"}}>
+      <div style={{fontSize:64}}>🎉</div>
+      <div style={{fontFamily:"'Bebas Neue'",fontSize:40,letterSpacing:3,marginTop:14,color:"#22d3a5"}}>¡LISTO, {alias}!</div>
+      <div style={{color:"rgba(255,255,255,.5)",marginTop:8,fontSize:15}}>Tus pronósticos están guardados</div>
+      <div style={{background:"rgba(34,211,165,.08)",border:"1px solid rgba(34,211,165,.2)",borderRadius:16,padding:"18px 28px",display:"inline-block",marginTop:20}}>
+        <div style={{fontSize:12,color:"rgba(255,255,255,.4)",marginBottom:6}}>TU PREMIO ELEGIDO</div>
+        <div style={{fontSize:40}}>{PRIZES.find(p=>p.id===prizeId)?.emoji}</div>
+        <div style={{fontWeight:700,fontSize:15,marginTop:6}}>{PRIZES.find(p=>p.id===prizeId)?.label}</div>
+        <div style={{fontSize:11,color:"rgba(255,255,255,.4)",marginTop:2}}>Si ganas, este es tuyo 🏆</div>
+      </div>
+      <div style={{display:"flex",gap:10,justifyContent:"center",marginTop:24,flexWrap:"wrap"}}>
+        <button onClick={()=>{setStep("code");setCode("");setRealName("");setAlias("");setPrizeId("");setPicks({});setErr("");setCodeErr("");}} style={btnS}>➕ Otro participante</button>
+        <button onClick={()=>setView("board")} style={btnP}>🏆 Ver tabla</button>
+      </div>
+    </div>
+  );
+
+  // PASO 1 — Clave
+  if(step==="code") return(
+    <div style={anim}>
+      <div style={{fontFamily:"'Bebas Neue'",fontSize:34,letterSpacing:3,marginBottom:6}}>ACCESO A LA QUINIELA</div>
+      <div style={{color:"rgba(255,255,255,.4)",fontSize:13,marginBottom:28}}>Ingresa la clave de 4 dígitos que te envió el organizador</div>
+      <div style={{maxWidth:300,margin:"0 auto"}}>
+        <label style={lbl}>CLAVE DE ACCESO</label>
+        <input value={code} onChange={e=>{setCode(e.target.value.replace(/\D/,"").slice(0,4));setCodeErr("");}} onKeyDown={e=>e.key==="Enter"&&checkCode()} placeholder="0000" maxLength={4} style={{...inp,textAlign:"center",fontSize:42,letterSpacing:18,fontFamily:"monospace"}}/>
+        {codeErr&&<div style={errB}>{codeErr}</div>}
+        <button onClick={checkCode} disabled={code.length!==4} style={{...btnP,width:"100%",marginTop:14,opacity:code.length===4?1:.35}}>Validar →</button>
+        <div style={{marginTop:32}}>
+          <label style={lbl}>PREMIOS DISPONIBLES</label>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+            {PRIZES.map(p=>(
+              <div key={p.id} style={{background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:10,padding:"10px 12px",display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:22}}>{p.emoji}</span>
+                <div><div style={{fontSize:12,fontWeight:600}}>{p.label}</div><div style={{fontSize:10,color:"rgba(255,255,255,.35)"}}>{p.desc}</div></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  // PASO 2 — Formulario
+  return(
+    <div style={anim}>
+      <div style={{fontFamily:"'Bebas Neue'",fontSize:34,letterSpacing:3,marginBottom:4}}>TUS PRONÓSTICOS</div>
+      <div style={{color:"rgba(255,255,255,.4)",fontSize:13,marginBottom:20}}>Clave ✓ · Selecciona G = Gana ese equipo · E = Empate</div>
+
+      <div style={{marginBottom:14}}>
+        <label style={lbl}>NOMBRE COMPLETO <span style={{color:"rgba(255,255,255,.25)",fontWeight:400,letterSpacing:0,textTransform:"none"}}>(solo lo ve el admin)</span></label>
+        <input value={realName} onChange={e=>{setRealName(e.target.value);setErr("");}} placeholder="Ej. Carlos García" style={inp}/>
+      </div>
+      <div style={{marginBottom:18}}>
+        <label style={lbl}>APODO <span style={{color:"rgba(255,255,255,.25)",fontWeight:400,letterSpacing:0,textTransform:"none"}}>(aparece en la tabla pública)</span></label>
+        <input value={alias} onChange={e=>{setAlias(e.target.value);setErr("");}} placeholder="Ej. El Tiburón, Checo, La Máquina..." style={inp}/>
+      </div>
+      <div style={{marginBottom:20}}>
+        <label style={lbl}>ELIGE TU PREMIO <span style={{color:"rgba(255,255,255,.25)",fontWeight:400,letterSpacing:0,textTransform:"none"}}>(si ganas, este es tuyo)</span></label>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+          {PRIZES.map(p=>(
+            <button key={p.id} onClick={()=>setPrizeId(p.id)} style={{background:prizeId===p.id?"rgba(34,211,165,.12)":"rgba(255,255,255,.04)",border:`2px solid ${prizeId===p.id?"#22d3a5":"rgba(255,255,255,.1)"}`,borderRadius:12,padding:"12px 10px",cursor:"pointer",display:"flex",alignItems:"center",gap:10,transition:"all .15s"}}>
+              <span style={{fontSize:26}}>{p.emoji}</span>
+              <div style={{textAlign:"left"}}><div style={{fontWeight:700,fontSize:13,color:prizeId===p.id?"#22d3a5":"#fff"}}>{p.label}</div><div style={{fontSize:11,color:"rgba(255,255,255,.4)"}}>{p.desc}</div></div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Barra progreso */}
+      <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14}}>
+        <div style={{flex:1,height:4,background:"rgba(255,255,255,.08)",borderRadius:99}}>
+          <div style={{height:"100%",width:`${(pickCount/matches.length)*100}%`,background:"linear-gradient(90deg,#22d3a5,#f59e0b)",borderRadius:99,transition:"width .3s"}}/>
+        </div>
+        <span style={{fontSize:12,color:"rgba(255,255,255,.4)",fontFamily:"monospace",whiteSpace:"nowrap"}}>{pickCount}/{matches.length}</span>
+      </div>
+
+      {/* Partidos con G / E / G */}
+      {matches.map((m,i)=>(
+        <MatchPick key={m.id} m={m} pick={picks[m.id]} onPick={v=>setPicks(p=>({...p,[m.id]:v}))} delay={i*25}/>
+      ))}
+
+      {err&&<div style={errB}>{err}</div>}
+      <button onClick={submit} disabled={!allPicked||!realName.trim()||!alias.trim()||!prizeId||saving}
+        style={{width:"100%",border:"none",borderRadius:14,padding:"15px",fontSize:16,fontWeight:700,
+          cursor:allPicked&&realName.trim()&&alias.trim()&&prizeId&&!saving?"pointer":"not-allowed",
+          background:allPicked&&realName.trim()&&alias.trim()&&prizeId&&!saving?"linear-gradient(135deg,#22d3a5,#0ea87d)":"rgba(255,255,255,.08)",
+          color:allPicked&&realName.trim()&&alias.trim()&&prizeId&&!saving?"#070e1f":"rgba(255,255,255,.3)",
+          marginTop:10,transition:"all .25s",
+          boxShadow:allPicked&&realName.trim()&&alias.trim()&&prizeId&&!saving?"0 4px 20px #22d3a544":"none"}}>
+        {saving?"Guardando...":"✅ Guardar pronósticos"}
+      </button>
+    </div>
+  );
+}
+
+// Tarjeta de partido con G / E / G
+function MatchPick({m,pick,onPick,delay}){
+  const opts=[
+    {v:"G1", label:"G", sublabel:m.home,  col:RC["G1"]},
+    {v:"E",  label:"E", sublabel:"Empate", col:RC["E"]},
+    {v:"G2", label:"G", sublabel:m.away,  col:RC["G2"]},
+  ];
+  return(
+    <div style={{background:pick?`${RC[pick].bg}0d`:"rgba(255,255,255,.04)",border:`1px solid ${pick?RC[pick].bg+"44":"rgba(255,255,255,.07)"}`,borderRadius:14,padding:"14px 16px",marginBottom:10,transition:"all .2s",animation:`fu .3s ease ${delay}ms both`}}>
+      {/* Equipos arriba */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+        <span style={{fontWeight:700,fontSize:14,flex:1}}>{m.home}</span>
+        <span style={{color:"rgba(255,255,255,.3)",fontSize:12,fontFamily:"monospace",padding:"0 10px"}}>{m.date}</span>
+        <span style={{fontWeight:700,fontSize:14,flex:1,textAlign:"right"}}>{m.away}</span>
+      </div>
+      {/* Botones G E G */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+        {opts.map(({v,label,sublabel,col})=>(
+          <button key={v} onClick={()=>onPick(v)} style={{
+            borderRadius:10,border:pick===v?`2px solid ${col.bg}`:"2px solid rgba(255,255,255,.1)",
+            background:pick===v?col.bg:"rgba(255,255,255,.05)",
+            color:pick===v?col.text:"rgba(255,255,255,.5)",
+            cursor:"pointer",padding:"10px 6px",
+            display:"flex",flexDirection:"column",alignItems:"center",gap:3,
+            transition:"all .15s",transform:pick===v?"scale(1.05)":"scale(1)",
+            boxShadow:pick===v?`0 0 12px ${col.bg}55`:"none",
+          }}>
+            <span style={{fontFamily:"'Space Mono',monospace",fontWeight:700,fontSize:20}}>{label}</span>
+            <span style={{fontSize:10,opacity:.8,textAlign:"center",lineHeight:1.2,maxWidth:70,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sublabel}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── TABLA ─────────────────────────────────────────────────────────────────────
+function Board({scored,matches,results,hasRes,parts}){
+  return(
+    <div style={anim}>
+      <div style={{fontFamily:"'Bebas Neue'",fontSize:36,letterSpacing:3,marginBottom:4}}>TABLA DE POSICIONES</div>
+      <div style={{fontSize:13,color:"rgba(255,255,255,.35)",marginBottom:22}}>{parts.length} participantes</div>
+      {scored.length===0?(
+        <div style={{textAlign:"center",padding:"60px 0",color:"rgba(255,255,255,.25)"}}>
+          <div style={{fontSize:52}}>👥</div><div style={{marginTop:12}}>Aún no hay participantes</div>
+        </div>
+      ):(
+        <>
+          {scored.length>=3&&(
+            <div style={{display:"flex",alignItems:"flex-end",justifyContent:"center",gap:10,marginBottom:26}}>
+              {[{p:scored[1],pos:2,h:72,medal:"🥈",col:"#94a3b8"},{p:scored[0],pos:1,h:104,medal:"🥇",col:"#f59e0b"},{p:scored[2],pos:3,h:52,medal:"🥉",col:"#b45309"}].map(({p,pos,h,medal,col})=>(
+                <div key={p.id} style={{flex:1,maxWidth:150,textAlign:"center"}}>
+                  <div style={{fontSize:24}}>{medal}</div>
+                  <div style={{fontWeight:700,fontSize:13,margin:"4px 0 1px",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{p.alias}</div>
+                  <div style={{fontSize:14,marginBottom:2}}>{PRIZES.find(x=>x.id===p.prize_id)?.emoji}</div>
+                  <div style={{fontFamily:"monospace",color:col,fontSize:16,fontWeight:700}}>{p.pts}pts</div>
+                  <div style={{background:col+"22",border:`2px solid ${col}55`,borderRadius:"8px 8px 0 0",height:h,marginTop:8,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                    <span style={{fontFamily:"'Bebas Neue'",fontSize:28,color:col}}>#{pos}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {scored.map((p,i)=>{
+            const prize=PRIZES.find(x=>x.id===p.prize_id);
+            return(
+              <div key={p.id} style={{background:i===0?"rgba(245,158,11,.07)":"rgba(255,255,255,.03)",border:`1px solid ${i===0?"rgba(245,158,11,.25)":"rgba(255,255,255,.07)"}`,borderRadius:12,padding:"12px 16px",marginBottom:8,display:"flex",alignItems:"center",gap:12,animation:`fu .3s ease ${i*20}ms both`}}>
+                <div style={{fontFamily:"monospace",fontSize:15,fontWeight:700,width:28,textAlign:"center",color:i<3?["#f59e0b","#94a3b8","#b45309"][i]:"rgba(255,255,255,.25)"}}>#{i+1}</div>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    <span style={{fontWeight:600,fontSize:15}}>{p.alias}</span>
+                    {prize&&<span title={prize.label}>{prize.emoji}</span>}
+                  </div>
+                  <div style={{display:"flex",gap:4,marginTop:5,flexWrap:"wrap"}}>
+                    {matches.map(m=>{
+                      const pick=p.picks[m.id],real=results[m.id];
+                      if(!pick) return null;
+                      const ok=real&&pick===real,wrong=real&&pick!==real;
+                      const displayLabel = pick==="E"?"E":"G";
+                      const displayTitle = pick==="G1"?m.home:pick==="G2"?m.away:"Empate";
+                      return <span key={m.id} title={`${m.home} vs ${m.away}: ${displayTitle}`} style={{background:wrong?"rgba(244,63,138,.15)":ok?"rgba(34,211,165,.15)":RC[pick].bg+"22",border:`1px solid ${wrong?"#f43f8a44":ok?"#22d3a544":RC[pick].bg+"44"}`,color:wrong?"#f43f8a":ok?"#22d3a5":RC[pick].bg,borderRadius:5,padding:"2px 7px",fontSize:11,fontFamily:"monospace",fontWeight:700}}>{displayLabel}</span>;
+                    })}
+                  </div>
+                </div>
+                <div style={{fontFamily:"'Bebas Neue'",fontSize:28,color:hasRes?"#22d3a5":"rgba(255,255,255,.3)",letterSpacing:1}}>{p.pts}<span style={{fontSize:11,color:"rgba(255,255,255,.3)",fontFamily:"sans-serif"}}> pts</span></div>
+              </div>
+            );
+          })}
+          {!hasRes&&<div style={{textAlign:"center",marginTop:18,color:"rgba(255,255,255,.3)",fontSize:13}}>Los puntos se actualizan cuando el admin cargue los resultados</div>}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ── ADMIN LOGIN ───────────────────────────────────────────────────────────────
+function AdminLogin({cfg,setAdminOk,setView}){
+  const [pin,setPin]=useState(""); const [err,setErr]=useState("");
+  function go(){
+    if(pin===(cfg?.adminPin||"1234")){setAdminOk(true);setView("admin");}
+    else setErr("PIN incorrecto");
+  }
+  return(
+    <div style={{maxWidth:300,margin:"80px auto",textAlign:"center",...anim}}>
+      <div style={{fontSize:48,marginBottom:14}}>🔑</div>
+      <div style={{fontFamily:"'Bebas Neue'",fontSize:32,letterSpacing:3,marginBottom:22}}>PANEL ADMIN</div>
+      <input type="password" value={pin} onChange={e=>{setPin(e.target.value);setErr("");}} onKeyDown={e=>e.key==="Enter"&&go()} placeholder="PIN" style={{...inp,textAlign:"center",letterSpacing:8,fontSize:22}}/>
+      {err&&<div style={{color:"#f43f8a",fontSize:13,marginTop:10}}>{err}</div>}
+      <button onClick={go} style={{...btnP,width:"100%",marginTop:14}}>Entrar</button>
+    </div>
+  );
+}
+
+// ── ADMIN ─────────────────────────────────────────────────────────────────────
+function Admin({cfg,saveCfg,parts,codes,removeParticipant,addCode,removeCode,resetAll,toast_,fetchAll}){
+  const [tab,   setTab]  = useState("codes");
+  const [newCode,setNC]  = useState("");
+  const [newM,   setNM]  = useState({home:"",away:"",date:""});
+  const [aRes,   setARes]= useState(cfg.results||{});
+  const [editId, setEId] = useState(null);
+  const [editD,  setED]  = useState({});
+  const [saving, setSave]= useState(false);
+  // Cambio PIN
+  const [oldPin, setOldPin]= useState("");
+  const [newPin, setNewPin]= useState("");
+  const [pinMsg, setPinMsg]= useState("");
+
+  async function genCode(){
+    let c=rand4();
+    while(codes.find(x=>x.code===c)) c=rand4();
+    await addCode(c);
+    setNC(c); toast_(`Clave generada: ${c} 🔑`);
+  }
+
+  function copyWA(c){
+    const url=window.location.href;
+    const msg=`Hola 👋 Te mando tu clave para *${cfg.name}*:\n\n🔑 *${c}*\n\nEntra aquí para registrar tus pronósticos:\n${url}\n\n¡Buena suerte! ⚽`;
+    navigator.clipboard.writeText(msg).then(()=>toast_("¡Mensaje copiado! Pégalo en WhatsApp 📋")).catch(()=>toast_(c));
+  }
+
+  async function publishRes(){
+    const miss=cfg.matches.find(m=>!aRes[m.id]);
+    if(miss){toast_(`Falta: ${miss.home} vs ${miss.away}`,"#f43f8a");return;}
+    setSave(true);
+    await saveCfg({...cfg,results:{...aRes}});
+    setSave(false); toast_("¡Resultados publicados! 🎯");
+  }
+
+  async function addMatch(){
+    if(!newM.home.trim()||!newM.away.trim()) return;
+    const upd={...cfg,matches:[...cfg.matches,{id:Date.now(),home:newM.home.trim(),away:newM.away.trim(),date:newM.date.trim()||"Por definir"}]};
+    await saveCfg(upd); setNM({home:"",away:"",date:""}); toast_("Partido añadido ✓");
+  }
+
+  async function saveEdit(id){
+    const upd={...cfg,matches:cfg.matches.map(m=>m.id===id?{...m,...editD}:m)};
+    await saveCfg(upd); setEId(null); toast_("Actualizado ✓");
+  }
+
+  async function changePin(){
+    if(oldPin!==cfg.adminPin){setPinMsg("PIN actual incorrecto");return;}
+    if(newPin.length<4){setPinMsg("El nuevo PIN debe tener al menos 4 caracteres");return;}
+    await saveCfg({...cfg,adminPin:newPin});
+    setOldPin(""); setNewPin(""); setPinMsg("✅ PIN actualizado correctamente");
+    setTimeout(()=>setPinMsg(""),3000);
+  }
+
+  async function doReset(){
+    if(!window.confirm("¿Reiniciar TODO? Se borrarán participantes, claves y resultados.")) return;
+    await resetAll(); toast_("Quiniela reiniciada","#f43f8a");
+  }
+
+  const TABS=[{id:"codes",label:"🔑 Claves"},{id:"matches",label:"⚽ Partidos"},{id:"results",label:"📊 Resultados"},{id:"people",label:`👥 (${parts.length})`},{id:"config",label:"⚙️ Config"}];
+
+  return(
+    <div style={anim}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16,flexWrap:"wrap",gap:8}}>
+        <div style={{fontFamily:"'Bebas Neue'",fontSize:32,letterSpacing:3}}>ADMINISTRACIÓN</div>
+        <button onClick={fetchAll} style={{background:"rgba(255,255,255,.07)",border:"1px solid rgba(255,255,255,.15)",color:"rgba(255,255,255,.7)",borderRadius:8,padding:"6px 14px",cursor:"pointer",fontSize:13}}>🔄 Refrescar</button>
+      </div>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:22}}>
+        {TABS.map(t=>(
+          <button key={t.id} onClick={()=>setTab(t.id)} style={{background:tab===t.id?"rgba(34,211,165,.15)":"rgba(255,255,255,.05)",border:`1px solid ${tab===t.id?"rgba(34,211,165,.4)":"rgba(255,255,255,.1)"}`,color:tab===t.id?"#22d3a5":"rgba(255,255,255,.55)",borderRadius:10,padding:"7px 14px",cursor:"pointer",fontWeight:600,fontSize:13}}>{t.label}</button>
+        ))}
+      </div>
+
+      {/* CLAVES */}
+      {tab==="codes"&&(
+        <div>
+          <div style={{fontSize:13,color:"rgba(255,255,255,.4)",marginBottom:18,lineHeight:1.7}}>
+            Genera una clave por participante. El botón "Copiar" genera el mensaje con el link incluido listo para pegar en WhatsApp.
+          </div>
+          <button onClick={genCode} style={{...btnP,marginBottom:20}}>🔑 Generar nueva clave</button>
+          {newCode&&(
+            <div style={{background:"rgba(34,211,165,.08)",border:"1px solid rgba(34,211,165,.3)",borderRadius:16,padding:20,marginBottom:20,textAlign:"center"}}>
+              <div style={{fontSize:11,color:"rgba(255,255,255,.4)",letterSpacing:2,marginBottom:10}}>ÚLTIMA CLAVE</div>
+              <div style={{fontFamily:"monospace",fontSize:56,fontWeight:700,color:"#22d3a5",letterSpacing:16}}>{newCode}</div>
+              <button onClick={()=>copyWA(newCode)} style={{marginTop:14,background:"rgba(34,211,165,.2)",border:"1px solid rgba(34,211,165,.4)",color:"#22d3a5",borderRadius:10,padding:"10px 22px",cursor:"pointer",fontWeight:700,fontSize:13}}>
+                📋 Copiar mensaje para WhatsApp
+              </button>
+            </div>
+          )}
+          {codes.length===0?<div style={{textAlign:"center",color:"rgba(255,255,255,.3)",padding:"30px 0"}}>Sin claves generadas</div>:(
+            <div style={{background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.07)",borderRadius:14,overflow:"hidden"}}>
+              <div style={{display:"grid",gridTemplateColumns:"80px 1fr 90px",padding:"8px 16px",borderBottom:"1px solid rgba(255,255,255,.06)",fontSize:11,color:"rgba(255,255,255,.3)",letterSpacing:1,fontWeight:700}}>
+                <span>CLAVE</span><span>ESTADO</span><span/>
+              </div>
+              {codes.map((c,i)=>{
+                const user=parts.find(p=>p.code===c.code);
+                return(
+                  <div key={c.code} style={{display:"grid",gridTemplateColumns:"80px 1fr 90px",padding:"12px 16px",borderBottom:i<codes.length-1?"1px solid rgba(255,255,255,.05)":"none",alignItems:"center"}}>
+                    <div style={{fontFamily:"monospace",fontSize:20,fontWeight:700,color:c.used?"#22d3a5":"rgba(255,255,255,.7)",letterSpacing:3}}>{c.code}</div>
+                    <div style={{fontSize:13}}>
+                      {c.used?<span style={{color:"#22d3a5"}}>✓ <strong>{user?.real_name}</strong> <span style={{color:"rgba(255,255,255,.35)",fontSize:11}}>"{user?.alias}"</span></span>:<span style={{color:"rgba(255,255,255,.35)"}}>Disponible</span>}
+                    </div>
+                    {!c.used&&(
+                      <div style={{display:"flex",gap:4,justifyContent:"flex-end"}}>
+                        <button onClick={()=>copyWA(c.code)} style={{background:"rgba(255,255,255,.07)",border:"1px solid rgba(255,255,255,.12)",color:"rgba(255,255,255,.7)",borderRadius:7,padding:"5px 8px",cursor:"pointer",fontSize:12}}>📋</button>
+                        <button onClick={()=>removeCode(c.code)} style={{background:"rgba(244,63,138,.1)",border:"none",color:"#f43f8a",borderRadius:7,padding:"5px 8px",cursor:"pointer",fontSize:12}}>✕</button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* PARTIDOS */}
+      {tab==="matches"&&(
+        <div>
+          {cfg.matches.map((m,i)=>(
+            <div key={m.id} style={{background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:12,padding:"11px 14px",marginBottom:8,display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              {editId===m.id?(
+                <>
+                  <input value={editD.home||""} onChange={e=>setED(d=>({...d,home:e.target.value}))} style={{flex:1,minWidth:80,...miniSt}} placeholder="Local"/>
+                  <span style={vsSt}>vs</span>
+                  <input value={editD.away||""} onChange={e=>setED(d=>({...d,away:e.target.value}))} style={{flex:1,minWidth:80,...miniSt}} placeholder="Visitante"/>
+                  <input value={editD.date||""} onChange={e=>setED(d=>({...d,date:e.target.value}))} style={{width:88,...miniSt}} placeholder="Fecha"/>
+                  <button onClick={()=>saveEdit(m.id)} style={ib("#22d3a5")}>✓</button>
+                  <button onClick={()=>setEId(null)} style={ib("rgba(255,255,255,.3)")}>✕</button>
+                </>
+              ):(
+                <>
+                  <span style={{flex:1,fontSize:13,fontWeight:500}}>{m.home} <span style={vsSt}>vs</span> {m.away}</span>
+                  <span style={{fontSize:11,color:"rgba(255,255,255,.3)",fontFamily:"monospace"}}>{m.date}</span>
+                  <button onClick={()=>{setEId(m.id);setED({home:m.home,away:m.away,date:m.date});}} style={ib("rgba(255,255,255,.5)")}>✏️</button>
+                  <button onClick={async()=>{await saveCfg({...cfg,matches:cfg.matches.filter(x=>x.id!==m.id)});toast_("Eliminado","#f43f8a");}} style={ib("#f43f8a")}>✕</button>
+                </>
+              )}
+            </div>
+          ))}
+          <div style={{background:"rgba(34,211,165,.05)",border:"1px dashed rgba(34,211,165,.2)",borderRadius:12,padding:16,marginTop:6}}>
+            <SLabel>AÑADIR PARTIDO</SLabel>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:8}}>
+              <input value={newM.home} onChange={e=>setNM(p=>({...p,home:e.target.value}))} placeholder="Local" style={{flex:1,minWidth:90,...miniSt}}/>
+              <input value={newM.away} onChange={e=>setNM(p=>({...p,away:e.target.value}))} placeholder="Visitante" style={{flex:1,minWidth:90,...miniSt}}/>
+              <input value={newM.date} onChange={e=>setNM(p=>({...p,date:e.target.value}))} placeholder="Fecha" style={{width:90,...miniSt}}/>
+              <button onClick={addMatch} style={{background:"#22d3a5",border:"none",color:"#070e1f",borderRadius:8,padding:"9px 16px",fontWeight:700,cursor:"pointer",fontSize:13}}>+ Añadir</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* RESULTADOS */}
+      {tab==="results"&&(
+        <div>
+          <div style={{fontSize:13,color:"rgba(255,255,255,.4)",marginBottom:16}}>Selecciona el resultado real de cada partido.</div>
+          {cfg.matches.map((m,i)=>(
+            <div key={m.id} style={{marginBottom:10}}>
+              <div style={{fontSize:13,fontWeight:600,marginBottom:6}}>{m.home} <span style={vsSt}>vs</span> {m.away}</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+                {[{v:"G1",label:"G",sub:m.home},{v:"E",label:"E",sub:"Empate"},{v:"G2",label:"G",sub:m.away}].map(({v,label,sub})=>(
+                  <button key={v} onClick={()=>setARes(r=>({...r,[m.id]:v}))} style={{borderRadius:10,border:aRes[m.id]===v?`2px solid ${RC[v].bg}`:"2px solid rgba(255,255,255,.1)",background:aRes[m.id]===v?RC[v].bg:"rgba(255,255,255,.05)",color:aRes[m.id]===v?RC[v].text:"rgba(255,255,255,.4)",cursor:"pointer",padding:"8px 6px",display:"flex",flexDirection:"column",alignItems:"center",gap:2,transition:"all .15s",transform:aRes[m.id]===v?"scale(1.05)":"scale(1)"}}>
+                    <span style={{fontFamily:"monospace",fontWeight:700,fontSize:18}}>{label}</span>
+                    <span style={{fontSize:10,opacity:.8,textAlign:"center",maxWidth:70,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{sub}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+          <div style={{display:"flex",gap:10,marginTop:18,flexWrap:"wrap"}}>
+            <button onClick={publishRes} disabled={saving} style={{flex:1,...btnP,opacity:saving?.6:1}}>{saving?"Guardando...":"📊 Publicar resultados"}</button>
+            {Object.keys(cfg.results).length>0&&<button onClick={async()=>{await saveCfg({...cfg,results:{}});setARes({});toast_("Borrado","#f59e0b");}} style={{background:"rgba(245,158,11,.15)",border:"1px solid rgba(245,158,11,.3)",color:"#f59e0b",borderRadius:12,padding:"13px 16px",cursor:"pointer",fontWeight:600,fontSize:13}}>🔄 Limpiar</button>}
+          </div>
+        </div>
+      )}
+
+      {/* PARTICIPANTES */}
+      {tab==="people"&&(
+        <div>
+          <div style={{fontSize:13,color:"rgba(255,255,255,.4)",marginBottom:16}}>Nombre real solo visible aquí. En la tabla pública aparece el apodo.</div>
+          {parts.length===0?<div style={{textAlign:"center",padding:"40px 0",color:"rgba(255,255,255,.3)"}}>Sin participantes aún</div>:(
+            <div style={{background:"rgba(255,255,255,.03)",border:"1px solid rgba(255,255,255,.07)",borderRadius:14,overflow:"hidden"}}>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 40px 36px",padding:"8px 16px",borderBottom:"1px solid rgba(255,255,255,.06)",fontSize:11,color:"rgba(255,255,255,.3)",letterSpacing:1,fontWeight:700}}>
+                <span>NOMBRE REAL</span><span>APODO</span><span style={{textAlign:"center"}}>🏆</span><span/>
+              </div>
+              {parts.map((p,i)=>{
+                const prize=PRIZES.find(x=>x.id===p.prize_id);
+                return(
+                  <div key={p.id} style={{display:"grid",gridTemplateColumns:"1fr 1fr 40px 36px",padding:"12px 16px",borderBottom:i<parts.length-1?"1px solid rgba(255,255,255,.05)":"none",alignItems:"center"}}>
+                    <div><div style={{fontWeight:600,fontSize:14}}>{p.real_name}</div><div style={{fontSize:11,color:"rgba(255,255,255,.3)",marginTop:2}}>Clave: <span style={{fontFamily:"monospace"}}>{p.code}</span></div></div>
+                    <div style={{fontSize:13,color:"rgba(255,255,255,.6)"}}>{p.alias}</div>
+                    <div style={{fontSize:18,textAlign:"center"}}>{prize?.emoji}</div>
+                    <button onClick={()=>{if(window.confirm(`¿Eliminar a ${p.real_name}?`))removeParticipant(p.id);}} style={{background:"rgba(244,63,138,.12)",border:"none",color:"#f43f8a",borderRadius:6,padding:"5px 7px",cursor:"pointer",fontSize:12}}>✕</button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* CONFIG */}
+      {tab==="config"&&(
+        <div>
+          {/* Nombre */}
+          <div style={card}>
+            <SLabel>NOMBRE DE LA QUINIELA</SLabel>
+            <input value={cfg.name} onChange={e=>saveCfg({...cfg,name:e.target.value})} style={inp}/>
+          </div>
+
+          {/* Registro abierto/cerrado */}
+          <div style={{...card,marginTop:14}}>
+            <SLabel>REGISTRO DE PARTICIPANTES</SLabel>
+            <div style={{display:"flex",alignItems:"center",gap:14}}>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:600,fontSize:14}}>{cfg.closed?"🔒 Cerrado":"🟢 Abierto"}</div>
+                <div style={{fontSize:12,color:"rgba(255,255,255,.4)",marginTop:2}}>{parts.length} participantes registrados</div>
+              </div>
+              <button onClick={()=>saveCfg({...cfg,closed:!cfg.closed})} style={{background:cfg.closed?"rgba(34,211,165,.15)":"rgba(244,63,138,.15)",border:`1px solid ${cfg.closed?"rgba(34,211,165,.3)":"rgba(244,63,138,.3)"}`,color:cfg.closed?"#22d3a5":"#f43f8a",borderRadius:8,padding:"8px 16px",cursor:"pointer",fontWeight:600,fontSize:13}}>{cfg.closed?"Abrir":"Cerrar"}</button>
+            </div>
+          </div>
+
+          {/* Cambiar PIN */}
+          <div style={{...card,marginTop:14}}>
+            <SLabel>CAMBIAR CONTRASEÑA ADMIN</SLabel>
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              <input type="password" value={oldPin} onChange={e=>{setOldPin(e.target.value);setPinMsg("");}} placeholder="PIN actual" style={inp}/>
+              <input type="password" value={newPin} onChange={e=>{setNewPin(e.target.value);setPinMsg("");}} placeholder="Nuevo PIN (mínimo 4 caracteres)" style={inp}/>
+              {pinMsg&&<div style={{color:pinMsg.startsWith("✅")?"#22d3a5":"#f43f8a",fontSize:13,fontWeight:600}}>{pinMsg}</div>}
+              <button onClick={changePin} style={{...btnP,alignSelf:"flex-start"}}>🔐 Actualizar PIN</button>
+            </div>
+          </div>
+
+          {/* Reiniciar */}
+          <button onClick={doReset} style={{marginTop:18,background:"rgba(244,63,138,.1)",border:"1px solid rgba(244,63,138,.2)",color:"#f43f8a",borderRadius:10,padding:"10px 20px",cursor:"pointer",fontWeight:600,fontSize:13}}>🗑️ Reiniciar quiniela completa</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Atoms ─────────────────────────────────────────────────────────────────────
+function Splash(){return(<div style={{minHeight:"100vh",background:"#070e1f",display:"flex",alignItems:"center",justifyContent:"center"}}><div style={{fontSize:28,color:"#22d3a5",letterSpacing:4,animation:"spin 1s linear infinite",fontSize:40}}>⚽</div></div>);}
+function SLabel({children,style}){return <div style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,.3)",letterSpacing:2,marginBottom:10,...style}}>{children}</div>;}
+function RChip({v,match}){
+  const label=v==="E"?"E":"G";
+  const title=v==="G1"?match.home:v==="G2"?match.away:"Empate";
+  return <span title={title} style={{background:RC[v].bg,color:RC[v].text,borderRadius:7,padding:"3px 10px",fontFamily:"monospace",fontWeight:700,fontSize:13,boxShadow:`0 0 10px ${RC[v].bg}55`}}>{label}</span>;
+}
+
+// ── Estilos ───────────────────────────────────────────────────────────────────
+const shell  ={minHeight:"100vh",background:"#070e1f",backgroundImage:"radial-gradient(ellipse 80% 40% at 50% -10%,#0d3b5e55 0%,transparent 70%)"};
+const hdr    ={position:"sticky",top:0,zIndex:200,background:"rgba(7,14,31,.92)",backdropFilter:"blur(16px)",borderBottom:"1px solid rgba(255,255,255,.07)",padding:"0 16px",height:60,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12};
+const logoSt ={fontFamily:"'Bebas Neue'",fontSize:24,letterSpacing:3,color:"#22d3a5",flexShrink:0};
+const subSt  ={fontSize:11,color:"rgba(255,255,255,.3)",fontFamily:"monospace",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:160};
+const anim   ={animation:"fu .35s ease"};
+const rowSt  ={background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.07)",borderRadius:12,padding:"12px 18px",marginBottom:8,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12};
+const vsSt   ={color:"rgba(255,255,255,.25)",fontSize:12};
+const inp    ={width:"100%",background:"rgba(255,255,255,.06)",border:"1px solid rgba(255,255,255,.12)",borderRadius:10,padding:"12px 16px",color:"#fff",fontSize:15,outline:"none"};
+const lbl    ={display:"block",fontSize:11,fontWeight:700,color:"rgba(255,255,255,.35)",letterSpacing:2,marginBottom:8,textTransform:"uppercase"};
+const errB   ={color:"#f43f8a",fontSize:13,fontWeight:600,margin:"8px 0 10px",padding:"10px 14px",background:"rgba(244,63,138,.1)",borderRadius:8,border:"1px solid rgba(244,63,138,.25)"};
+const miniSt ={background:"rgba(0,0,0,.3)",border:"1px solid rgba(255,255,255,.15)",borderRadius:8,padding:"8px 11px",color:"#fff",fontSize:13,outline:"none"};
+const card   ={background:"rgba(255,255,255,.04)",border:"1px solid rgba(255,255,255,.08)",borderRadius:14,padding:18};
+const nb     =a=>({background:a?"rgba(34,211,165,.15)":"rgba(255,255,255,.05)",border:`1px solid ${a?"rgba(34,211,165,.4)":"rgba(255,255,255,.1)"}`,color:a?"#22d3a5":"rgba(255,255,255,.6)",borderRadius:8,padding:"6px 12px",cursor:"pointer",fontSize:12,fontWeight:600,whiteSpace:"nowrap"});
+const btnP   ={background:"linear-gradient(135deg,#22d3a5,#0ea87d)",border:"none",color:"#070e1f",borderRadius:12,padding:"13px 26px",fontSize:15,fontWeight:700,cursor:"pointer",boxShadow:"0 4px 20px #22d3a544"};
+const btnS   ={background:"rgba(255,255,255,.07)",border:"1px solid rgba(255,255,255,.15)",color:"#fff",borderRadius:12,padding:"13px 22px",fontSize:15,fontWeight:700,cursor:"pointer"};
+const ib     =col=>({background:"transparent",border:`1px solid ${col}33`,color:col,borderRadius:6,padding:"5px 9px",cursor:"pointer",fontSize:13});
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
